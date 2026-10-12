@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sales To Go Pricing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Password -->
+<section id="gate" class="screen center" hidden>
+  <form id="gate-form" class="card narrow">
+    <h1>Sales To Go pricing</h1>
+    <p class="sub">Enter the app password.</p>
+    <label class="field"><span>Password</span><input type="password" id="pw" autocomplete="current-password" required></label>
+    <p class="err" id="gate-err" hidden></p>
+    <button class="btn primary" type="submit">Open</button>
+  </form>
+</section>
+
+<!-- Upload -->
+<section id="home" class="screen" hidden>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <h1>Sales To Go pricing</h1>
+        <p class="sub">Upload your eBay price &amp; quantity file. The app pulls the last 90 days of sold prices for each model, compares them with your prices, and gives you an upload file for the ones you approve.</p>
+      </div>
+      <button class="btn" id="lock" type="button">Lock</button>
+    </header>
+
+    <div id="resume" class="card" hidden>
+      <div>
+        <h2>Last review</h2>
+        <p class="sub" id="resume-text"></p>
+      </div>
+      <button class="btn primary" id="resume-open" type="button">Open last review</button>
+    </div>
+
+    <div id="running" class="card" hidden>
+      <div>
+        <h2>A comps pull is in progress</h2>
+        <p class="sub">It keeps running on Apify while this page is closed.</p>
+      </div>
+      <button class="btn primary" id="running-open" type="button">Check progress</button>
+    </div>
+
+    <label class="drop card" id="drop" for="file">
+      <input type="file" id="file" accept=".csv,text/csv">
+      <strong>Choose your eBay file</strong>
+      <span class="sub">or drop it here. In Seller Hub: Listings &gt; Active &gt; Edit price &amp; quantity &gt; Download, or Reports &gt; Downloads.</span>
+    </label>
+    <p class="err" id="file-err" hidden></p>
+  </div>
+</section>
+
+<!-- Plan -->
+<section id="plan" class="screen" hidden>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <h1>Ready to pull comps</h1>
+        <p class="sub" id="plan-file"></p>
+      </div>
+      <button class="btn" id="plan-back" type="button">Choose another file</button>
+    </header>
+
+    <section class="strip" aria-label="File summary">
+      <div class="stat"><span class="k">Listings in file</span><span class="v" id="p-all">—</span></div>
+      <div class="stat"><span class="k">To check</span><span class="v" id="p-check">—</span></div>
+      <div class="stat"><span class="k">eBay searches</span><span class="v" id="p-terms">—</span></div>
+      <div class="stat"><span class="k">No model number</span><span class="v" id="p-nomodel">—</span></div>
+      <div class="stat"><span class="k">Rough cost</span><span class="v" id="p-cost">—</span></div>
+    </section>
+
+    <div class="card settings">
+      <label class="field check"><input type="checkbox" id="opt-zero"><span>Include listings with 0 available</span></label>
+      <label class="field"><span>What to pull</span>
+        <select id="opt-mode">
+          <option value="both">Sold (90 days) and active listings</option>
+          <option value="sold">Sold only (cheaper)</option>
+        </select></label>
+      <label class="field"><span>Max comps per search</span>
+        <select id="opt-max"><option>15</option><option selected>25</option><option>40</option></select></label>
+      <label class="field"><span>Spending cap (USD)</span><input type="number" id="opt-cap" min="1" max="100" step="1" value="15"></label>
+      <label class="field"><span>Your eBay seller name (left out of comps)</span><input type="text" id="opt-seller" value="sales_2_go" autocomplete="off"></label>
+    </div>
+
+    <details class="card">
+      <summary>See the searches (<span id="p-terms2"></span>)</summary>
+      <p class="sub">A model number is searched on its own when it has letters (UTS3913EPBG); plain numbers get the brand in front (Moen 84516). Listings with no model number are searched by the first words of the title, so check those comps by eye.</p>
+      <div class="scroll"><table class="terms"><thead><tr><th>Search</th><th>Listings</th><th>Example title</th></tr></thead><tbody id="terms"></tbody></table></div>
+    </details>
+
+    <div class="bar">
+      <button class="btn primary big" id="start" type="button">Pull comps</button>
+      <span class="sub" id="plan-note">A full file takes about 15–40 minutes. You can close the page; it keeps running.</span>
+    </div>
+    <p class="err" id="plan-err" hidden></p>
+  </div>
+</section>
+
+<!-- Progress -->
+<section id="run" class="screen" hidden>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <h1>Pulling comps</h1>
+        <p class="sub" id="run-sub">Searching eBay through Apify. This keeps going if you close the page.</p>
+      </div>
+    </header>
+    <div class="card progress">
+      <div class="meter"><div id="meter-fill"></div></div>
+      <div class="strip plain">
+        <div class="stat"><span class="k">Batch</span><span class="v" id="r-batch">—</span></div>
+        <div class="stat"><span class="k">Status</span><span class="v small" id="r-status">—</span></div>
+        <div class="stat"><span class="k">Results so far</span><span class="v" id="r-items">—</span></div>
+        <div class="stat"><span class="k">Running for</span><span class="v" id="r-time">—</span></div>
+      </div>
+      <p class="sub" id="r-msg"></p>
+    </div>
+    <div class="bar">
+      <button class="btn" id="run-stop" type="button">Stop and use what's in</button>
+      <button class="btn" id="run-cancel" type="button">Cancel</button>
+    </div>
+    <p class="err" id="run-err" hidden></p>
+  </div>
+</section>
+
+<!-- Review -->
+<section id="review" class="screen" hidden>
+  <div class="wrap pad-dock">
+    <header class="top">
+      <div>
+        <h1>Sales To Go repricing</h1>
+        <p class="sub" id="rv-sub">Each listing compared with eBay sales of the exact model in the last 90 days. The new price starts at the median sold price; change it if you like, tick the ones to update, then download the upload file.</p>
+      </div>
+      <button class="btn" id="rv-new" type="button">New file</button>
+    </header>
+
+    <section class="strip" aria-label="Summary">
+      <div class="stat"><span class="k">Listings</span><span class="v" id="s-total">—</span></div>
+      <div class="stat"><span class="k">With sales</span><span class="v" id="s-sales">—</span></div>
+      <div class="stat"><span class="k">Priced over median</span><span class="v" id="s-over">—</span></div>
+      <div class="stat"><span class="k">Ticked to update</span><span class="v" id="s-ok">—</span></div>
+      <div class="stat"><span class="k">Change in list value</span><span class="v" id="s-delta">—</span></div>
+    </section>
+
+    <div class="bar" role="group" aria-label="Show">
+      <button class="chip" data-f="over" type="button">Over median by 15%+ <span class="c"></span></button>
+      <button class="chip" data-f="under" type="button">Under median by 15%+ <span class="c"></span></button>
+      <button class="chip" data-f="near" type="button">Within 15% <span class="c"></span></button>
+      <button class="chip" data-f="nosales" type="button">No sales <span class="c"></span></button>
+      <button class="chip" data-f="ok" type="button">Ticked <span class="c"></span></button>
+      <button class="chip" data-f="all" type="button">All <span class="c"></span></button>
+    </div>
+    <div class="bar">
+      <input type="search" id="q" placeholder="Search title, model or SKU" aria-label="Search listings">
+      <select id="sort" aria-label="Sort">
+        <option value="gap">Biggest gap first</option>
+        <option value="value">Most money at stake</option>
+        <option value="price">Your price, high to low</option>
+        <option value="sales">Most sales</option>
+        <option value="title">Title A–Z</option>
+      </select>
+      <button class="btn" id="tick-view" type="button">Tick all shown with 3+ sales</button>
+      <button class="btn" id="untick-view" type="button">Untick all shown</button>
+    </div>
+
+    <div class="list" id="list" role="list">
+      <div class="row head" aria-hidden="true"><span></span><span>Listing</span><span class="r">Your price</span><span class="r">Median sold</span><span class="r">Lowest active</span><span class="r">New price</span></div>
+    </div>
+    <p class="note">Sold prices are item price without shipping. Other finishes (for example 84516SRN against 84516), other brands that share the number, lots, parts sold "for" a model, used and for-parts listings, and your own listings are left out. "Best offer" sales show the asking price, so the real sale was likely lower. The upload file changes the price only; quantity is left blank so your stock counts aren't touched.</p>
+  </div>
+  <div class="dock"><div class="in">
+    <span class="status" id="status"></span>
+    <button class="btn primary" id="export" type="button" disabled>Download eBay upload file</button>
+  </div></div>
+</section>
+
+<script src="lib.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

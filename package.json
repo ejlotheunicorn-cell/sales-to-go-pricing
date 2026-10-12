@@ -1,0 +1,7 @@
+{
+  "name": "sales-to-go-pricing",
+  "private": true,
+  "description": "Upload an eBay price & quantity file, pull 90-day sold comps through Apify, approve new prices, download the eBay revise file.",
+
+  "engines": { "node": ">=18" }
+}
