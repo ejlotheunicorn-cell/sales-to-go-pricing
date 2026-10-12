@@ -61,4 +61,14 @@ t('sold comps win over Amazon when there are sales but no active listings', () =
   assert.equal(d.sug.rule, 'sold'); assert.equal(d.sug.price, 70);
 });
 
+t('nothing on eBay or Amazon: 25% under Moen.com retail (before Amazon list price)', () => {
+  const ts = Object.assign({}, mine, { title: 'Moen TS984BN Doux Roman Tub Faucet', model: 'TS984BN', query: 'TS984BN' });
+  const moen = { TS984BN: { price: 1074.19, compare: null, retail: 1074.19, handle: 'ts984' } };
+  const d = L.buildReview([ts], [], 'sales_2_go', { asOf, moen }, [{ input: L.amazonUrl('TS984BN'), title: 'Moen TS984BN', price: null, getPriceBeforeDiscount: { value: 900 } }])[0];
+  assert.equal(d.sug.rule, 'retail'); assert.equal(d.sug.price, 805.64); assert.match(d.sug.why, /Moen\.com/);
+  const noMoen = L.buildReview([ts], [], 'sales_2_go', { asOf, moen: { TS984BN: null } }, [])[0];
+  assert.equal(noMoen.sug.rule, 'none');
+  assert.equal(L.needsMoen([Object.assign({ n: 0, an: 0 }, ts)]).length, 1);
+});
+
 console.log(n + ' rule checks passed');

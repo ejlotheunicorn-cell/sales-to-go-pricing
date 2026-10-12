@@ -87,7 +87,7 @@
     return {
       zero: $('opt-zero').checked, mode: $('opt-mode').value, maxItems: +$('opt-max').value,
       cap: Math.max(1, Math.min(100, +$('opt-cap').value || 15)), seller: $('opt-seller').value.trim(),
-      amazon: $('opt-amazon').checked,
+      amazon: $('opt-amazon').checked, moen: $('opt-moen').checked,
     };
   }
   function applySettings(s) {
@@ -95,6 +95,7 @@
     $('opt-zero').checked = !!s.zero; $('opt-mode').value = s.mode || 'both'; $('opt-max').value = String(s.maxItems || 25);
     $('opt-cap').value = s.cap || 15; $('opt-seller').value = s.seller != null ? s.seller : 'sales_2_go';
     $('opt-amazon').checked = s.amazon !== false;
+    $('opt-moen').checked = s.moen !== false;
   }
   let planned = null;
   function openPlan() {
@@ -123,7 +124,7 @@
     const batches = Math.ceil(terms.size / BATCH);
     $('plan-note').textContent = (batches > 1 ? 'Runs in ' + batches + ' batches. ' : '') + 'A full file takes about 15–40 minutes. You can close the page; it keeps running.';
   }
-  ['opt-zero', 'opt-mode', 'opt-max', 'opt-cap', 'opt-seller', 'opt-amazon'].forEach((id) => $(id).addEventListener('change', renderPlan));
+  ['opt-zero', 'opt-mode', 'opt-max', 'opt-cap', 'opt-seller', 'opt-amazon', 'opt-moen'].forEach((id) => $(id).addEventListener('change', renderPlan));
   $('plan-back').addEventListener('click', goHome);
 
   $('start').addEventListener('click', async () => {
@@ -241,7 +242,21 @@
     $('r-msg').textContent = 'Downloading results and matching them to your listings…';
     const rows = await ebayRows(run);
     const amazonRows = run.amazon ? await fetchRows(run.amazon.datasetId, 'amazon') : (run.settings.amazon ? [] : null);
-    const data = STG.buildReview(run.listings, rows, run.settings.seller, {}, amazonRows);
+    let moen = null;
+    if (run.settings.moen) {
+      const interim = STG.buildReview(run.listings, rows, run.settings.seller, {}, amazonRows);
+      const models = Array.from(new Set(STG.needsMoen(interim).map((d) => d.model)));
+      moen = {};
+      for (let i = 0; i < models.length; i += 20) {
+        $('r-status').textContent = 'Checking Moen.com';
+        $('r-msg').textContent = 'Looking up Moen.com retail prices: ' + Math.min(i + 20, models.length) + ' of ' + models.length + '…';
+        try {
+          const r = await api('moen', { body: { models: models.slice(i, i + 20) } });
+          Object.keys(r.results || {}).forEach((m) => { const v = r.results[m]; if (!v || !v.error) moen[m] = v; });
+        } catch (ex) { err('run-err', 'Moen.com lookup failed for some items: ' + ex.message); }
+      }
+    }
+    const data = STG.buildReview(run.listings, rows, run.settings.seller, { moen }, amazonRows);
     const review = { data, meta: { filename: run.filename, pulledAt: new Date().toISOString(), count: data.length, rows: rows.length, mode: run.settings.mode, amazon: !!run.amazon } };
     if (!store.set(K.review, review)) {
       err('run-err', 'The results are too large for this browser to keep. They are shown now but will be gone if you close the page.');
@@ -301,9 +316,10 @@
     return '<span class="pill ' + (ch < 0 ? 'cut' : 'raise') + '">' + pct(ch) + '</span>';
   }
   const RULE_LABEL = { sold: 'from sales', undercut: '2% under new active', active: 'under active', amazon: 'Amazon −10%', retail: 'retail −25%', none: 'no data' };
+  const retailSource = (d) => (d.moen && d.moen.retail ? 'Moen.com −25%' : 'retail −25%');
   function rulePill(d) {
     const r = d.sug ? d.sug.rule : 'none';
-    return '<span class="pill ' + (r === 'sold' ? 'flat' : 'warn') + '" title="' + esc(d.sug ? d.sug.why : '') + '">' + RULE_LABEL[r] + '</span>';
+    return '<span class="pill ' + (r === 'sold' ? 'flat' : 'warn') + '" title="' + esc(d.sug ? d.sug.why : '') + '">' + (r === 'retail' ? retailSource(d) : RULE_LABEL[r]) + '</span>';
   }
   const soldUrl = (d) => 'https://www.ebay.com/sch/i.html?_nkw=' + encodeURIComponent(d.query) + '&LH_Sold=1&LH_Complete=1&_ipg=120';
 
@@ -316,7 +332,7 @@
     h += '<div class="t"><a href="' + esc(soldUrl(d)) + '" target="_blank" rel="noopener">' + esc(d.title) + '</a>';
     h += '<div class="meta"><span>' + esc(d.model || 'no model #') + '</span>' + (d.sku ? '<span>SKU ' + esc(d.sku) + '</span>' : '') + '<span>Qty ' + d.qty + '</span>';
     h += '<span class="mob num">Yours ' + money(d.price) + '</span>';
-    h += (d.n || d.an || d.amz) ? '<button type="button" data-act="comps">' + (open.has(d.id) ? 'Hide comps' : 'Show comps') + '</button>' : '';
+    h += (d.n || d.an || d.amz || d.moen) ? '<button type="button" data-act="comps">' + (open.has(d.id) ? 'Hide comps' : 'Show comps') + '</button>' : '';
     h += '</div></div>';
     h += '<div class="cell yours"><span class="num">' + money(d.price) + '</span>' + gp + '</div>';
     h += '<div class="cell sold"><span class="num">' + money(d.med) + '</span><span class="s">' + confidence(d) + (d.n ? ' ' + money(d.lo) + '–' + money(d.hi) : '') + '</span><span class="mob">' + gp + '</span></div>';
@@ -338,6 +354,10 @@
     if (d.amz) {
       h += '<div><h4>Amazon</h4><table><tr><td>' + (d.amz.asin ? '<a href="https://www.amazon.com/dp/' + esc(d.amz.asin) + '" target="_blank" rel="noopener">' + esc(d.amz.title || 'Amazon listing') + '</a>' : esc(d.amz.title || '')) +
         (d.amz.list ? ' <span class="note">list price ' + money(d.amz.list) + '</span>' : '') + '</td><td class="p">' + (d.amz.price ? money(d.amz.price) : 'not for sale') + '</td></tr></table></div>';
+    }
+    if (d.moen && d.moen.retail) {
+      h += '<div><h4>Moen.com retail</h4><table><tr><td><a href="https://shop.moen.com/products/' + esc(d.moen.handle) + '" target="_blank" rel="noopener">' + esc(d.moen.title || d.model) + '</a>' +
+        (d.moen.compare && d.moen.price && d.moen.compare > d.moen.price ? ' <span class="note">on sale ' + money(d.moen.price) + '</span>' : '') + '</td><td class="p">' + money(d.moen.retail) + '</td></tr></table></div>';
     }
     return h + '</div>';
   }

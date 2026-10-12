@@ -150,7 +150,7 @@
     recentWeight: 3,      // ...count this many times as much as older ones (31-90 days)
     undercut: 0.02,       // when every active price is above every sold price: this much under the median NEW active price
     amazonOff: 0.10,      // no eBay data: this much under Amazon's new price
-    retailOff: 0.25,      // nothing on Amazon: this much under retail (Amazon list price)
+    retailOff: 0.25,      // nothing on Amazon: this much under retail (Moen.com price, else Amazon list price)
   };
   const DAMAGE = /\b(read|scratch(?:es|ed)?|scuff(?:s|ed)?|defect(?:s|ive)?|damaged?|dent(?:s|ed)?|crack(?:s|ed)?|broken|chip(?:s|ped)?|as[- ]is)\b/;
   const OWN_READ = /\bread\b/i;
@@ -284,8 +284,9 @@
       return { price: r2(base * (1 - R.undercut)), rule: 'active', why: 'No sales in 90 days; ' + Math.round(R.undercut * 100) + '% under the median ' + (d.anewMed != null ? 'new ' : '') + 'active price' };
     }
     if (d.amz && d.amz.price) return { price: r2(d.amz.price * (1 - R.amazonOff)), rule: 'amazon', why: 'Nothing on eBay; ' + Math.round(R.amazonOff * 100) + '% under Amazon new price' };
+    if (d.moen && d.moen.retail) return { price: r2(d.moen.retail * (1 - R.retailOff)), rule: 'retail', why: 'Nothing on eBay or Amazon; ' + Math.round(R.retailOff * 100) + '% under Moen.com retail' };
     if (d.amz && d.amz.list) return { price: r2(d.amz.list * (1 - R.retailOff)), rule: 'retail', why: 'Nothing on eBay or for sale on Amazon; ' + Math.round(R.retailOff * 100) + '% under retail (Amazon list price)' };
-    return { price: null, rule: 'none', why: 'No eBay comps and no Amazon match' };
+    return { price: null, rule: 'none', why: 'No eBay comps, no Amazon match and no Moen.com price' };
   }
 
   function buildReview(listings, rows, seller, opts, amazonRows) {
@@ -306,6 +307,7 @@
         { id: l.id, title: l.title, model: l.model, query: l.query, sku: l.sku, qty: l.qty, price: l.price, cat: l.cat },
         compsFor(l, byQ.get(l.query) || [], seller, opts));
       if (amazonRows) d.amz = amazonFor(l, byUrl.get(amazonUrl(l.query)) || []);
+      if (opts.moen && l.model && Object.prototype.hasOwnProperty.call(opts.moen, l.model)) d.moen = opts.moen[l.model];
       d.sug = suggest(d, opts);
       return d;
     });
@@ -314,6 +316,10 @@
   // Listings with nothing usable on eBay: these get an Amazon lookup.
   function needsAmazon(review) {
     return review.filter((d) => !d.n && !d.an);
+  }
+  // Moen listings with nothing on eBay and no Amazon price: these get a Moen.com retail lookup.
+  function needsMoen(review) {
+    return review.filter((d) => !d.n && !d.an && !(d.amz && d.amz.price) && d.model && /moen/i.test(d.title));
   }
 
   function reviseCSV(items, priceOf) {
@@ -325,7 +331,7 @@
     return lines.join('\r\n') + '\r\n';
   }
 
-  const api = { RULES, parseCSV, csvCell, readEbayExport, extractModel, brandOf, searchTerm, prepareListings, compsFor, buildReview, suggest, needsAmazon, amazonUrl, amazonFor, weightedMedian, reviseCSV, median };
+  const api = { RULES, parseCSV, csvCell, readEbayExport, extractModel, brandOf, searchTerm, prepareListings, compsFor, buildReview, suggest, needsAmazon, needsMoen, amazonUrl, amazonFor, weightedMedian, reviseCSV, median };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.STG = api;
 })(typeof window !== 'undefined' ? window : globalThis);

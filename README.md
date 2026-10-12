@@ -19,7 +19,8 @@ Ticks and edited prices are saved in the browser you used.
 4. **Sales:** the suggestion is the median sold price, with sales from the last 30 days counted 3×.
 5. **Active all higher:** if every active listing is priced above every sale, the suggestion is 2% under the median price of active listings in *new* condition.
 6. **No sales, only active listings:** 2% under the median active price.
-7. **Nothing on eBay:** 10% under Amazon's new price. If Amazon lists the item but isn't selling it, 25% under Amazon's list price (retail). If Amazon doesn't have the exact model either, there is no suggestion.
+7. **Nothing on eBay:** 10% under Amazon's new price.
+8. **Nothing on Amazon either:** 25% under the retail price of that exact finish on Moen.com (shop.moen.com, read directly by the server, no Apify cost). If Moen.com doesn't sell it, 25% under Amazon's list price when there is one; otherwise no suggestion.
 
 The numbers live at the top of the pricing section in `public/lib.js` (`RULES`). `node test/rules.test.cjs` checks each rule.
 

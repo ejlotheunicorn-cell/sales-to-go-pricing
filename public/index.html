@@ -88,6 +88,7 @@
       <label class="field"><span>Spending cap (USD)</span><input type="number" id="opt-cap" min="1" max="100" step="1" value="15"></label>
       <label class="field"><span>Your eBay seller name (left out of comps)</span><input type="text" id="opt-seller" value="sales_2_go" autocomplete="off"></label>
       <label class="field check"><input type="checkbox" id="opt-amazon" checked><span>Check Amazon for listings with no eBay data (about 2½¢ each)</span></label>
+      <label class="field check"><input type="checkbox" id="opt-moen" checked><span>Check Moen.com retail when Amazon has nothing (free)</span></label>
     </div>
 
     <details class="card">
@@ -183,7 +184,8 @@
         <li><strong>Sales:</strong> the suggestion is the median sold price, with sales from the last 30 days counted 3×.</li>
         <li><strong>Active all higher:</strong> if every active listing is above every sale, the suggestion is 2% under the median price of active listings in new condition.</li>
         <li><strong>No sales:</strong> 2% under the median active price.</li>
-        <li><strong>Nothing on eBay:</strong> 10% under Amazon's new price; if Amazon lists it but isn't selling it, 25% under Amazon's list price (retail).</li>
+        <li><strong>Nothing on eBay:</strong> 10% under Amazon's new price.</li>
+        <li><strong>Nothing on Amazon either:</strong> 25% under the retail price for that exact finish on Moen.com (shop.moen.com). If Moen.com doesn't sell it, 25% under Amazon's list price when there is one.</li>
       </ol>
       <p class="note">"Best offer" sales show the asking price, so the real sale was likely lower. The upload file changes the price only; quantity is left blank so your stock counts aren't touched.</p>
     </details>

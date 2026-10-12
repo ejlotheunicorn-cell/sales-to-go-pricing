@@ -79,6 +79,41 @@ export default async (req) => {
       return json(200, { runId: run.data.id, datasetId: run.data.defaultDatasetId, status: run.data.status });
     }
 
+    if (action === 'moen') {
+      // Retail prices from Moen's own store (shop.moen.com, public product data). No Apify cost.
+      const models = Array.isArray(body.models) ? body.models.filter((m) => typeof m === 'string' && /^[A-Za-z0-9.\-]{3,30}$/.test(m)).slice(0, 25) : [];
+      const clean = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const products = new Map();
+      const getJson = async (path) => {
+        const r = await fetch('https://shop.moen.com' + path, { headers: { accept: 'application/json', 'user-agent': 'Mozilla/5.0 (pricing lookup)' } });
+        if (!r.ok) throw new Error('Moen ' + r.status);
+        return r.json();
+      };
+      const product = (handle) => {
+        if (!products.has(handle)) products.set(handle, getJson('/products/' + encodeURIComponent(handle) + '.json').then((j) => j.product).catch(() => null));
+        return products.get(handle);
+      };
+      const results = {};
+      const one = async (m) => {
+        try {
+          const s = await getJson('/search/suggest.json?q=' + encodeURIComponent(m) + '&resources[type]=product&resources[limit]=4');
+          const handles = ((s.resources && s.resources.results && s.resources.results.products) || []).map((x) => x.handle);
+          for (const h of handles) {
+            const p = await product(h);
+            const v = p && (p.variants || []).find((x) => clean(x.sku) === clean(m));
+            if (v) {
+              const price = parseFloat(v.price) || null, compare = parseFloat(v.compare_at_price) || null;
+              results[m] = { price, compare, retail: Math.max(price || 0, compare || 0) || null, handle: p.handle, title: (p.title + (v.title && v.title !== 'Default Title' ? ' – ' + v.title : '')).slice(0, 110) };
+              return;
+            }
+          }
+          results[m] = null;
+        } catch (e) { results[m] = { error: e.message }; }
+      };
+      for (let i = 0; i < models.length; i += 5) await Promise.all(models.slice(i, i + 5).map(one));
+      return json(200, { results });
+    }
+
     if (action === 'status') {
       const runId = url.searchParams.get('runId') || body.runId;
       if (!/^[A-Za-z0-9]{8,32}$/.test(runId || '')) return json(400, { error: 'Bad run id.' });
