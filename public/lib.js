@@ -141,67 +141,179 @@
   }
   const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-  function compsFor(listing, rows, seller) {
+  // Joel's pricing rules. Change the numbers here to tune them.
+  const RULES = {
+    feedbackMin: 98,      // ignore active listings from sellers under this % positive feedback
+    band: 0.20,           // ignore comps more than 20% above or below the median...
+    bandMin: 4,           // ...when a pool (sold or active) has at least this many comps
+    recentDays: 30,       // sales this recent...
+    recentWeight: 3,      // ...count this many times as much as older ones (31-90 days)
+    undercut: 0.02,       // when every active price is above every sold price: this much under the median NEW active price
+    amazonOff: 0.10,      // no eBay data: this much under Amazon's new price
+    retailOff: 0.25,      // nothing on Amazon: this much under retail (Amazon list price)
+  };
+  const DAMAGE = /\b(read|scratch(?:es|ed)?|scuff(?:s|ed)?|defect(?:s|ive)?|damaged?|dent(?:s|ed)?|crack(?:s|ed)?|broken|chip(?:s|ped)?|as[- ]is)\b/;
+  const OWN_READ = /\bread\b/i;
+  const r2 = (v) => Math.round(v * 100) / 100;
+
+  // Weighted median: each value counts `w` times.
+  function weightedMedian(items) {
+    if (!items.length) return null;
+    const s = items.slice().sort((a, b) => a.v - b.v);
+    const total = s.reduce((t, x) => t + x.w, 0);
+    let acc = 0;
+    for (let i = 0; i < s.length; i++) {
+      acc += s[i].w;
+      if (acc > total / 2) return r2(s[i].v);
+      if (acc === total / 2) return r2((s[i].v + s[i + 1].v) / 2);
+    }
+    return r2(s[s.length - 1].v);
+  }
+
+  function matcher(listing) {
     const ownTitle = listing.title, ownL = ownTitle.toLowerCase();
     const brand = /moen/i.test(ownTitle) ? 'moen' : (brandOf(ownTitle) || '').toLowerCase();
-    const ownHasValve = /\b(w\/ ?valve|with (rough[- ]in )?valve|valve included|w\/ rough)/.test(ownL);
     const mnorm = listing.model ? norm(listing.model).replace(/ /g, '') : '';
     const pat = mnorm ? new RegExp('(^|[^A-Z0-9])' + escRe(mnorm) + '([^A-Z0-9]|$)') : null;
     const forPat = mnorm ? new RegExp('\\b(for|fits|compatible with)\\b[^|]{0,60}' + escRe(mnorm.toLowerCase())) : null;
+    const ownHasValve = /\b(w\/ ?valve|with (rough[- ]in )?valve|valve included|w\/ rough)/.test(ownL);
+    const ownIsRead = OWN_READ.test(ownTitle);
+    // true when a comp's title describes the same item in comparable shape
+    return function sameItem(t) {
+      const tl = t.toLowerCase();
+      if (pat && !pat.test(norm(t))) return false;
+      if (brand.length > 2 && !tl.replace(/[^a-z]/g, '').includes(brand.replace(/[^a-z]/g, ''))) return false;
+      if (LOT.test(t) && !LOT.test(ownTitle)) return false;
+      if (ACCESSORY.test(t) && !ACCESSORY.test(ownTitle)) return false;
+      if (forPat && forPat.test(tl.replace(/[^a-z0-9 ]/g, ''))) return false;
+      if (PART_WORDS.test(tl) && !PART_WORDS_OWN.test(ownL)) return false;
+      if (/\bused\b/.test(tl)) return false;
+      if (DAMAGE.test(tl) && !ownIsRead) return false;
+      if (ownHasValve && /no valve|valve (not included|required|sold separately)|trim only/.test(tl)) return false;
+      return true;
+    };
+  }
+
+  function compsFor(listing, rows, seller, opts) {
+    const R = Object.assign({}, RULES, opts && opts.rules);
+    const asOf = (opts && opts.asOf) || Date.now();
+    const sameItem = matcher(listing);
     const me = (seller || '').toLowerCase();
     const sold = [], active = [];
+    const seen = { s: new Set(), a: new Set() };
+    let lowFeedback = 0;
     for (const x of rows) {
-      const t = x.title || '', tl = t.toLowerCase();
+      const t = x.title || '';
       if (me && (x.sellerUsername || '').toLowerCase() === me) continue;
-      if (pat && !pat.test(norm(t))) continue;
-      if (brand.length > 2 && !tl.replace(/[^a-z]/g, '').includes(brand.replace(/[^a-z]/g, ''))) continue;
-      if (LOT.test(t) && !LOT.test(ownTitle)) continue;
-      if (ACCESSORY.test(t) && !ACCESSORY.test(ownTitle)) continue;
-      if (forPat && forPat.test(tl.replace(/[^a-z0-9 ]/g, ''))) continue;
-      if (PART_WORDS.test(tl) && !PART_WORDS_OWN.test(ownL)) continue;
+      if (!sameItem(t)) continue;
       const cond = (x.condition || '').toLowerCase();
-      if (cond.includes('part') || cond.includes('pre-owned') || cond.includes('used') || /\bused\b/.test(tl)) continue;
-      if (ownHasValve && /no valve|valve (not included|required|sold separately)|trim only/.test(tl)) continue;
+      if (cond.includes('part') || cond.includes('pre-owned') || cond.includes('used')) continue;
       const p = x.priceValue;
       if (typeof p !== 'number' || !(p > 0)) continue;
-      const c = { p: Math.round(p * 100) / 100, t: t.slice(0, 90), c: x.condition || '', id: x.itemId };
-      if (x.sold) { c.d = parseSoldDate(x.soldDate); c.bo = !!x.bestOfferAccepted; sold.push(c); }
-      else active.push(c);
+      if (!x.sold && typeof x.sellerFeedbackPercentage === 'number' && x.sellerFeedbackPercentage < R.feedbackMin) { lowFeedback++; continue; }
+      const key = x.sold ? 's' : 'a';
+      if (seen[key].has(x.itemId)) continue;
+      seen[key].add(x.itemId);
+      const ship = typeof x.shippingCost === 'number' && x.shippingCost > 0 ? x.shippingCost : 0;
+      const c = { p: r2(p), s: r2(ship), tot: r2(p + ship), t: t.slice(0, 90), c: x.condition || '', id: x.itemId,
+        isNew: /\bnew\b/i.test(x.condition || '') && !/other|defect/i.test(x.condition || '') };
+      if (x.sold) {
+        c.d = parseSoldDate(x.soldDate);
+        c.bo = !!x.bestOfferAccepted;
+        c.recent = !!c.d && (asOf - Date.parse(c.d)) / 864e5 <= R.recentDays;
+        sold.push(c);
+      } else active.push(c);
     }
-    for (const lst of [sold, active]) {
-      if (lst.length >= 3) {
-        const m = median(lst.map((c) => c.p));
-        const keep = lst.filter((c) => c.p >= 0.35 * m);
-        lst.length = 0; keep.forEach((c) => lst.push(c));
-      }
-    }
-    // one comp per eBay item (a listing can show in both sold and active, or twice)
-    const dedupe = (lst) => { const seen = new Set(); return lst.filter((c) => (seen.has(c.id) ? false : seen.add(c.id))); };
-    const S = dedupe(sold).sort((a, b) => (b.d || '').localeCompare(a.d || ''));
-    const A = dedupe(active).sort((a, b) => a.p - b.p);
-    const sp = S.map((c) => c.p), ap = A.map((c) => c.p);
+    // drop comps more than 20% from the median when a pool is big enough
+    let outliers = 0;
+    const band = (lst) => {
+      if (lst.length < R.bandMin) return lst;
+      const m = median(lst.map((c) => c.tot));
+      const keep = lst.filter((c) => c.tot >= m * (1 - R.band) && c.tot <= m * (1 + R.band));
+      outliers += lst.length - keep.length;
+      return keep;
+    };
+    const S = band(sold).sort((a, b) => (b.d || '').localeCompare(a.d || ''));
+    const A = band(active).sort((a, b) => a.tot - b.tot);
+    const st = S.map((c) => c.tot), at = A.map((c) => c.tot);
+    const newActive = A.filter((c) => c.isNew).map((c) => c.tot);
     return {
-      n: sp.length, med: median(sp), lo: sp.length ? Math.min(...sp) : null, hi: sp.length ? Math.max(...sp) : null,
+      n: st.length, recentN: S.filter((c) => c.recent).length,
+      med: median(st), wmed: weightedMedian(S.map((c) => ({ v: c.tot, w: c.recent ? R.recentWeight : 1 }))),
+      lo: st.length ? Math.min(...st) : null, hi: st.length ? Math.max(...st) : null,
       last: S.reduce((m, c) => (c.d && (!m || c.d > m) ? c.d : m), null),
       bo: S.filter((c) => c.bo).length,
-      an: ap.length, alo: ap.length ? Math.min(...ap) : null, amed: median(ap),
+      an: at.length, alo: at.length ? Math.min(...at) : null, ahi: at.length ? Math.max(...at) : null,
+      amed: median(at), anewMed: median(newActive), anewN: newActive.length,
+      dropped: { outliers, lowFeedback },
       sold: S.slice(0, 25), active: A.slice(0, 10),
     };
   }
 
-  function buildReview(listings, rows, seller) {
+  // ---------- Amazon (only for listings with no eBay comps) ----------
+  const amazonUrl = (q) => 'https://www.amazon.com/s?k=' + encodeURIComponent(q).replace(/%20/g, '+');
+  function amazonFor(listing, rows) {
+    const sameItem = matcher(listing);
+    const hits = rows.filter((x) => x && sameItem(x.title || ''));
+    const priced = hits.filter((x) => x.price && typeof x.price.value === 'number' && x.price.value > 0);
+    const lists = hits.map((x) => x.getPriceBeforeDiscount && x.getPriceBeforeDiscount.value).filter((v) => typeof v === 'number' && v > 0);
+    const best = priced.sort((a, b) => a.price.value - b.price.value)[0];
+    if (!best && !lists.length) return hits.length ? { price: null, list: null, n: hits.length } : null;
+    return {
+      price: best ? r2(best.price.value) : null,
+      list: lists.length ? r2(Math.max(...lists)) : null,
+      title: best ? (best.title || '').slice(0, 110) : (hits[0].title || '').slice(0, 110),
+      asin: best ? best.asin : hits[0].asin, n: hits.length,
+    };
+  }
+
+  // ---------- the suggestion ----------
+  function suggest(d, opts) {
+    const R = Object.assign({}, RULES, opts && opts.rules);
+    if (d.n) {
+      if (d.an && d.alo > d.hi) {
+        const base = d.anewMed != null ? d.anewMed : d.amed;
+        return { price: r2(base * (1 - R.undercut)), rule: 'undercut',
+          why: 'Every active listing is above every sale, so ' + Math.round(R.undercut * 100) + '% under the median ' + (d.anewMed != null ? 'new ' : '') + 'active price' };
+      }
+      return { price: d.wmed, rule: 'sold',
+        why: d.recentN ? 'Median of ' + d.n + ' sales (incl. shipping), last-' + R.recentDays + '-day sales counted ' + R.recentWeight + '×' : 'Median of ' + d.n + ' sales (incl. shipping), none in the last ' + R.recentDays + ' days' };
+    }
+    if (d.an) {
+      const base = d.anewMed != null ? d.anewMed : d.amed;
+      return { price: r2(base * (1 - R.undercut)), rule: 'active', why: 'No sales in 90 days; ' + Math.round(R.undercut * 100) + '% under the median ' + (d.anewMed != null ? 'new ' : '') + 'active price' };
+    }
+    if (d.amz && d.amz.price) return { price: r2(d.amz.price * (1 - R.amazonOff)), rule: 'amazon', why: 'Nothing on eBay; ' + Math.round(R.amazonOff * 100) + '% under Amazon new price' };
+    if (d.amz && d.amz.list) return { price: r2(d.amz.list * (1 - R.retailOff)), rule: 'retail', why: 'Nothing on eBay or for sale on Amazon; ' + Math.round(R.retailOff * 100) + '% under retail (Amazon list price)' };
+    return { price: null, rule: 'none', why: 'No eBay comps and no Amazon match' };
+  }
+
+  function buildReview(listings, rows, seller, opts, amazonRows) {
+    opts = Object.assign({ asOf: Date.now() }, opts);
     const byQ = new Map();
-    const seen = new Set();
     for (const x of rows) {
-      const key = x.searchQuery + '|' + x.itemId + '|' + (x.sold ? 1 : 0);
-      if (seen.has(key)) continue;
-      seen.add(key);
       if (!byQ.has(x.searchQuery)) byQ.set(x.searchQuery, []);
       byQ.get(x.searchQuery).push(x);
     }
-    return listings.map((l) => Object.assign(
-      { id: l.id, title: l.title, model: l.model, query: l.query, sku: l.sku, qty: l.qty, price: l.price, cat: l.cat },
-      compsFor(l, byQ.get(l.query) || [], seller)));
+    const byUrl = new Map();
+    for (const x of amazonRows || []) {
+      const k = x.input || x.searchUrl || '';
+      if (!byUrl.has(k)) byUrl.set(k, []);
+      byUrl.get(k).push(x);
+    }
+    return listings.map((l) => {
+      const d = Object.assign(
+        { id: l.id, title: l.title, model: l.model, query: l.query, sku: l.sku, qty: l.qty, price: l.price, cat: l.cat },
+        compsFor(l, byQ.get(l.query) || [], seller, opts));
+      if (amazonRows) d.amz = amazonFor(l, byUrl.get(amazonUrl(l.query)) || []);
+      d.sug = suggest(d, opts);
+      return d;
+    });
+  }
+
+  // Listings with nothing usable on eBay: these get an Amazon lookup.
+  function needsAmazon(review) {
+    return review.filter((d) => !d.n && !d.an);
   }
 
   function reviseCSV(items, priceOf) {
@@ -213,7 +325,7 @@
     return lines.join('\r\n') + '\r\n';
   }
 
-  const api = { parseCSV, csvCell, readEbayExport, extractModel, brandOf, searchTerm, prepareListings, compsFor, buildReview, reviseCSV, median };
+  const api = { RULES, parseCSV, csvCell, readEbayExport, extractModel, brandOf, searchTerm, prepareListings, compsFor, buildReview, suggest, needsAmazon, amazonUrl, amazonFor, weightedMedian, reviseCSV, median };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.STG = api;
 })(typeof window !== 'undefined' ? window : globalThis);

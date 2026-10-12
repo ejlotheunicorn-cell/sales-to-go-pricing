@@ -120,3 +120,8 @@ table.terms td:first-child { font-family: var(--mono); white-space: nowrap; }
 .stat .v.small { font-size: 0.95rem; }
 .row.head .r { text-align: right; }
 @media (prefers-reduced-motion: reduce) { .meter > div { transition: none; } }
+
+.newp .pill + .pill { margin-top: 2px; }
+.comps .why { grid-column: 1 / -1; margin: 0; font-size: 0.85rem; }
+.rules ol { margin: 8px 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; max-width: 80ch; }
+.rules { flex-direction: column; align-items: stretch; }

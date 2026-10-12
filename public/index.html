@@ -87,6 +87,7 @@
         <select id="opt-max"><option>15</option><option selected>25</option><option>40</option></select></label>
       <label class="field"><span>Spending cap (USD)</span><input type="number" id="opt-cap" min="1" max="100" step="1" value="15"></label>
       <label class="field"><span>Your eBay seller name (left out of comps)</span><input type="text" id="opt-seller" value="sales_2_go" autocomplete="off"></label>
+      <label class="field check"><input type="checkbox" id="opt-amazon" checked><span>Check Amazon for listings with no eBay data (about 2½¢ each)</span></label>
     </div>
 
     <details class="card">
@@ -136,7 +137,7 @@
     <header class="top">
       <div>
         <h1>Sales To Go repricing</h1>
-        <p class="sub" id="rv-sub">Each listing compared with eBay sales of the exact model in the last 90 days. The new price starts at the median sold price; change it if you like, tick the ones to update, then download the upload file.</p>
+        <p class="sub" id="rv-sub">Each listing compared with eBay sales of the exact model in the last 90 days. The new price starts at the suggested price; change it if you like, tick the ones to update, then download the upload file.</p>
       </div>
       <button class="btn" id="rv-new" type="button">New file</button>
     </header>
@@ -144,16 +145,16 @@
     <section class="strip" aria-label="Summary">
       <div class="stat"><span class="k">Listings</span><span class="v" id="s-total">—</span></div>
       <div class="stat"><span class="k">With sales</span><span class="v" id="s-sales">—</span></div>
-      <div class="stat"><span class="k">Priced over median</span><span class="v" id="s-over">—</span></div>
+      <div class="stat"><span class="k">Priced over suggested</span><span class="v" id="s-over">—</span></div>
       <div class="stat"><span class="k">Ticked to update</span><span class="v" id="s-ok">—</span></div>
       <div class="stat"><span class="k">Change in list value</span><span class="v" id="s-delta">—</span></div>
     </section>
 
     <div class="bar" role="group" aria-label="Show">
-      <button class="chip" data-f="over" type="button">Over median by 15%+ <span class="c"></span></button>
-      <button class="chip" data-f="under" type="button">Under median by 15%+ <span class="c"></span></button>
+      <button class="chip" data-f="over" type="button">Over suggested by 15%+ <span class="c"></span></button>
+      <button class="chip" data-f="under" type="button">Under suggested by 15%+ <span class="c"></span></button>
       <button class="chip" data-f="near" type="button">Within 15% <span class="c"></span></button>
-      <button class="chip" data-f="nosales" type="button">No sales <span class="c"></span></button>
+      <button class="chip" data-f="nosales" type="button">No suggestion <span class="c"></span></button>
       <button class="chip" data-f="ok" type="button">Ticked <span class="c"></span></button>
       <button class="chip" data-f="all" type="button">All <span class="c"></span></button>
     </div>
@@ -171,9 +172,21 @@
     </div>
 
     <div class="list" id="list" role="list">
-      <div class="row head" aria-hidden="true"><span></span><span>Listing</span><span class="r">Your price</span><span class="r">Median sold</span><span class="r">Lowest active</span><span class="r">New price</span></div>
+      <div class="row head" aria-hidden="true"><span></span><span>Listing</span><span class="r">Your price</span><span class="r">Median sold (incl. ship)</span><span class="r">Lowest active</span><span class="r">New price</span></div>
     </div>
-    <p class="note">Sold prices are item price without shipping. Other finishes (for example 84516SRN against 84516), other brands that share the number, lots, parts sold "for" a model, used and for-parts listings, and your own listings are left out. "Best offer" sales show the asking price, so the real sale was likely lower. The upload file changes the price only; quantity is left blank so your stock counts aren't touched.</p>
+    <details class="card rules" id="rules">
+      <summary>How the suggested price is worked out</summary>
+      <ol>
+        <li><strong>Comps:</strong> exact model, same brand. Left out: your own listings, lots, parts sold "for" a model, used or for-parts items, and titles mentioning damage (read, scratch, scuff, defect, dent, crack, broken) unless your title says *Read. Active listings from sellers under 98% positive feedback are left out.</li>
+        <li><strong>Shipping:</strong> what the buyer paid for shipping is added to each price, since your listings ship free.</li>
+        <li><strong>Outliers:</strong> when there are 4 or more sold (or active) comps, any more than 20% above or below their median is left out.</li>
+        <li><strong>Sales:</strong> the suggestion is the median sold price, with sales from the last 30 days counted 3×.</li>
+        <li><strong>Active all higher:</strong> if every active listing is above every sale, the suggestion is 2% under the median price of active listings in new condition.</li>
+        <li><strong>No sales:</strong> 2% under the median active price.</li>
+        <li><strong>Nothing on eBay:</strong> 10% under Amazon's new price; if Amazon lists it but isn't selling it, 25% under Amazon's list price (retail).</li>
+      </ol>
+      <p class="note">"Best offer" sales show the asking price, so the real sale was likely lower. The upload file changes the price only; quantity is left blank so your stock counts aren't touched.</p>
+    </details>
   </div>
   <div class="dock"><div class="in">
     <span class="status" id="status"></span>

@@ -5,20 +5,25 @@ Upload your eBay **price & quantity** file, pull the last 90 days of eBay sold p
 ## How it works
 
 1. **Upload.** Seller Hub → Listings → Active → *Edit price & quantity* → Download (or Reports → Downloads). Drop that CSV on the first screen.
-2. **Pull comps.** The app finds each listing's model number and searches eBay through Apify (scraper: `memo23/ebay-search-scraper-ppe`). It runs on Apify's servers, so you can close the page and come back. A full file of ~600 listings takes about 15–40 minutes and roughly $5–15 of Apify credit; the spending cap you set is a hard limit.
+2. **Pull comps.** The app finds each listing's model number and searches eBay through Apify (scraper: `memo23/ebay-search-scraper-ppe`). It runs on Apify's servers, so you can close the page and come back. A full file of ~600 listings takes about 15–40 minutes and roughly $5–15 of Apify credit; the spending cap you set is a hard limit. Listings with nothing on eBay then get an Amazon lookup (about 2½¢ each, scraper `junglee/Amazon-crawler`).
 3. **Review.** Every listing shows your price, the median sold price, the lowest active price and a suggested new price (the median sold). *Show comps* lists the actual sales and listings behind each number with links to eBay.
 4. **Download the upload file.** Only ticked listings go in it, and only the price changes; quantity is left blank so stock counts are not touched. Upload it in Seller Hub → Reports → Uploads.
 
 Ticks and edited prices are saved in the browser you used.
 
-### What counts as a comp
+### How the suggested price is worked out
 
-* Exact model number in the title (84516 does not match 84516SRN or 84516BL).
-* Same brand as your listing (drops trading cards, stamps and other products that share a number).
-* Left out: your own listings (seller name on the setup screen), lots and multi-packs, parts sold "for" a model (aerators, handle kits, cartridges), used / pre-owned / for-parts items, prices far below the rest, and "no valve" comps when your title says the valve is included.
-* "Best offer" sales show the asking price, so the real sale was probably lower.
+1. **Comps:** exact model number, same brand. Left out: your own listings, lots and multi-packs, parts sold "for" a model, used or for-parts items, and titles that mention damage (read, scratch, scuff, defect, dent, crack, broken) unless your own title says *Read. Active listings from sellers under 98% positive feedback are left out.
+2. **Shipping:** what the buyer paid for shipping is added to each price (your listings ship free).
+3. **Outliers:** when there are 4 or more sold (or active) comps, any more than 20% above or below their median is left out.
+4. **Sales:** the suggestion is the median sold price, with sales from the last 30 days counted 3×.
+5. **Active all higher:** if every active listing is priced above every sale, the suggestion is 2% under the median price of active listings in *new* condition.
+6. **No sales, only active listings:** 2% under the median active price.
+7. **Nothing on eBay:** 10% under Amazon's new price. If Amazon lists the item but isn't selling it, 25% under Amazon's list price (retail). If Amazon doesn't have the exact model either, there is no suggestion.
 
-Listings without a model number are searched by the first words of the title; check those comps by eye.
+The numbers live at the top of the pricing section in `public/lib.js` (`RULES`). `node test/rules.test.cjs` checks each rule.
+
+"Best offer" sales show the asking price, so the real sale was probably lower.
 
 ## Setup (one time)
 
@@ -47,3 +52,4 @@ Change the password by editing `APP_PASSWORD` and redeploying. The Apify token n
 * `public/` — the app (`index.html`, `style.css`, `app.js`) and the matching rules (`lib.js`)
 * `netlify/functions/apify.mjs` — server function that talks to Apify (Netlify)
 * `api/apify.mjs` — the same function for Vercel
+* `test/rules.test.cjs` — checks each pricing rule on small examples

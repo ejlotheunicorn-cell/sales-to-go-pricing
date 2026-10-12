@@ -4,9 +4,11 @@
 //   APP_PASSWORD  — the password people type to use the app
 
 const ACTOR = 'memo23~ebay-search-scraper-ppe';
+const AMAZON_ACTOR = 'junglee~Amazon-crawler';
 const API = 'https://api.apify.com/v2';
-const MAX_TERMS = 450; // the scraper accepts at most 500 search terms per run
-const ITEM_FIELDS = 'searchQuery,sold,soldDate,priceValue,title,sellerUsername,bestOfferAccepted,condition,itemId';
+const MAX_TERMS = 450; // the eBay scraper accepts at most 500 search terms per run
+const ITEM_FIELDS = 'searchQuery,sold,soldDate,priceValue,shippingCost,title,sellerUsername,sellerFeedbackPercentage,bestOfferAccepted,condition,itemId';
+const AMAZON_FIELDS = 'input,asin,title,price,getPriceBeforeDiscount';
 
 const env = (k) => (globalThis.Netlify?.env?.get?.(k)) ?? process.env[k];
 const json = (status, body) => new Response(JSON.stringify(body), {
@@ -51,12 +53,23 @@ export default async (req) => {
     if (action === 'ping') return json(200, { ok: true });
 
     if (action === 'start') {
+      const cap = Math.min(Math.max(Number(body.maxChargeUsd) || 10, 1), 100);
+      if (body.source === 'amazon') {
+        const urls = Array.isArray(body.urls) ? body.urls.filter((u) => typeof u === 'string' && /^https:\/\/www\.amazon\.com\/s\?k=/.test(u)) : [];
+        if (!urls.length) return json(400, { error: 'No Amazon searches were sent.' });
+        if (urls.length > MAX_TERMS) return json(400, { error: 'At most ' + MAX_TERMS + ' Amazon searches per run.' });
+        const input = {
+          categoryOrProductUrls: urls.map((url) => ({ url })), maxItemsPerStartUrl: 6, maxSearchPagesPerStartUrl: 1,
+          scrapeProductDetails: false, maxOffers: 0, scrapeSellers: false,
+        };
+        const run = await apify('/acts/' + AMAZON_ACTOR + '/runs?maxTotalChargeUsd=' + cap, { method: 'POST', body: JSON.stringify(input) });
+        return json(200, { runId: run.data.id, datasetId: run.data.defaultDatasetId, status: run.data.status });
+      }
       const terms = Array.isArray(body.searchQueries) ? body.searchQueries.filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()) : [];
       if (!terms.length) return json(400, { error: 'No search terms were sent.' });
       if (terms.length > MAX_TERMS) return json(400, { error: 'At most ' + MAX_TERMS + ' search terms per run.' });
       const mode = ['sold', 'both'].includes(body.mode) ? body.mode : 'both';
       const maxItems = Math.min(Math.max(parseInt(body.maxItems, 10) || 25, 5), 60);
-      const cap = Math.min(Math.max(Number(body.maxChargeUsd) || 10, 1), 100);
       const input = {
         searchQueries: terms, marketplace: 'ebay.com', mode, soldWithinDays: 90,
         titleMustMatchQuery: true, detailedItems: false, includeSummary: false, includeLegacyFields: false,
@@ -84,7 +97,8 @@ export default async (req) => {
       if (!/^[A-Za-z0-9]{8,32}$/.test(ds || '')) return json(400, { error: 'Bad dataset id.' });
       const offset = Math.max(parseInt(url.searchParams.get('offset'), 10) || 0, 0);
       const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit'), 10) || 2000, 1), 5000);
-      const items = await apify('/datasets/' + ds + '/items?clean=true&format=json&fields=' + ITEM_FIELDS + '&offset=' + offset + '&limit=' + limit);
+      const fields = url.searchParams.get('kind') === 'amazon' ? AMAZON_FIELDS : ITEM_FIELDS;
+      const items = await apify('/datasets/' + ds + '/items?clean=true&format=json&fields=' + fields + '&offset=' + offset + '&limit=' + limit);
       return json(200, { items: Array.isArray(items) ? items : [], offset, limit });
     }
 

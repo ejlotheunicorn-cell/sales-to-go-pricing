@@ -87,12 +87,14 @@
     return {
       zero: $('opt-zero').checked, mode: $('opt-mode').value, maxItems: +$('opt-max').value,
       cap: Math.max(1, Math.min(100, +$('opt-cap').value || 15)), seller: $('opt-seller').value.trim(),
+      amazon: $('opt-amazon').checked,
     };
   }
   function applySettings(s) {
     if (!s) return;
     $('opt-zero').checked = !!s.zero; $('opt-mode').value = s.mode || 'both'; $('opt-max').value = String(s.maxItems || 25);
     $('opt-cap').value = s.cap || 15; $('opt-seller').value = s.seller != null ? s.seller : 'sales_2_go';
+    $('opt-amazon').checked = s.amazon !== false;
   }
   let planned = null;
   function openPlan() {
@@ -121,7 +123,7 @@
     const batches = Math.ceil(terms.size / BATCH);
     $('plan-note').textContent = (batches > 1 ? 'Runs in ' + batches + ' batches. ' : '') + 'A full file takes about 15–40 minutes. You can close the page; it keeps running.';
   }
-  ['opt-zero', 'opt-mode', 'opt-max', 'opt-cap', 'opt-seller'].forEach((id) => $(id).addEventListener('change', renderPlan));
+  ['opt-zero', 'opt-mode', 'opt-max', 'opt-cap', 'opt-seller', 'opt-amazon'].forEach((id) => $(id).addEventListener('change', renderPlan));
   $('plan-back').addEventListener('click', goHome);
 
   $('start').addEventListener('click', async () => {
@@ -130,7 +132,7 @@
     const s = settings();
     const chunks = [];
     for (let i = 0; i < planned.terms.length; i += BATCH) chunks.push(planned.terms.slice(i, i + BATCH));
-    const run = { filename: fileName, settings: s, listings: planned.listings, chunks, idx: 0, runs: [], startedAt: new Date().toISOString() };
+    const run = { filename: fileName, settings: s, listings: planned.listings, chunks, idx: 0, runs: [], phase: 'ebay', amazon: null, startedAt: new Date().toISOString() };
     if (!store.set(K.run, run)) { err('plan-err', 'This browser would not save the job. Free up site storage and try again.'); return; }
     $('start').disabled = true;
     try { await startChunk(run); show('run'); poll(); }
@@ -145,30 +147,65 @@
     run.runs[run.idx] = { runId: r.runId, datasetId: r.datasetId };
     store.set(K.run, run);
   }
+  async function fetchRows(datasetId, kind) {
+    const rows = [];
+    for (let offset = 0; ; offset += 2000) {
+      const page = await api('items', { params: Object.assign({ datasetId, offset, limit: 2000 }, kind ? { kind } : {}) });
+      rows.push(...page.items);
+      if (page.items.length < 2000) break;
+    }
+    return rows;
+  }
+  async function ebayRows(run) {
+    const rows = [];
+    for (const r of run.runs) if (r) rows.push(...(await fetchRows(r.datasetId)));
+    return rows;
+  }
+  // After eBay: look up Amazon for listings that found nothing on eBay.
+  async function startAmazon(run) {
+    $('r-status').textContent = 'Checking Amazon';
+    $('r-msg').textContent = 'eBay done. Looking up Amazon prices for listings with no eBay comps…';
+    const interim = STG.buildReview(run.listings, await ebayRows(run), run.settings.seller);
+    const queries = Array.from(new Set(STG.needsAmazon(interim).map((d) => d.query))).slice(0, 450);
+    if (!queries.length) return false;
+    const cap = Math.max(1, Math.min(10, Math.round(queries.length * 6 * 0.004 * 1.5 * 100) / 100));
+    const r = await api('start', { body: { source: 'amazon', urls: queries.map(STG.amazonUrl), maxChargeUsd: cap } });
+    run.phase = 'amazon';
+    run.amazon = { runId: r.runId, datasetId: r.datasetId, count: queries.length };
+    store.set(K.run, run);
+    return true;
+  }
   let pollTimer = null, stopping = false;
   function resumeRun() { show('run'); poll(); }
   async function poll() {
     clearTimeout(pollTimer);
     const run = store.get(K.run, null);
     if (!run) { goHome(); return; }
-    const cur = run.runs[run.idx];
-    $('r-batch').textContent = (run.idx + 1) + ' of ' + run.chunks.length;
+    const amazonPhase = run.phase === 'amazon';
+    const cur = amazonPhase ? run.amazon : run.runs[run.idx];
+    $('r-batch').textContent = amazonPhase ? 'Amazon (' + run.amazon.count + ' items)' : 'eBay ' + (run.idx + 1) + ' of ' + run.chunks.length;
     $('r-time').textContent = Math.max(0, Math.round((Date.now() - Date.parse(run.startedAt)) / 60000)) + ' min';
     try {
-      if (!cur) { await startChunk(run); return poll(); }
+      if (!cur && !amazonPhase) { await startChunk(run); return poll(); }
       const st = await api('status', { params: { runId: cur.runId } });
       err('run-err');
-      $('r-status').textContent = st.status === 'RUNNING' ? 'Searching' : st.status === 'READY' ? 'Starting' : st.status.toLowerCase();
+      $('r-status').textContent = st.status === 'RUNNING' ? (amazonPhase ? 'Checking Amazon' : 'Searching eBay') : st.status === 'READY' ? 'Starting' : st.status.toLowerCase();
       $('r-items').textContent = (st.itemCount == null ? '—' : st.itemCount);
       const m = /Crawled (\d+)\/(\d+) pages/.exec(st.statusMessage || '');
       const part = DONE.has(st.status) ? 1 : m ? Math.min(0.97, +m[1] / Math.max(+m[2], 1)) : 0.02;
-      $('meter-fill').style.width = Math.round(((run.idx + part) / run.chunks.length) * 100) + '%';
+      const steps = run.chunks.length + (run.settings.amazon ? 1 : 0);
+      const doneSteps = amazonPhase ? run.chunks.length : run.idx;
+      $('meter-fill').style.width = Math.round(((doneSteps + part) / steps) * 100) + '%';
       $('r-msg').textContent = st.statusMessage ? 'Apify: ' + st.statusMessage : '';
       if (DONE.has(st.status)) {
-        if (st.status === 'FAILED') err('run-err', 'Batch ' + (run.idx + 1) + ' stopped with an error on Apify. Its results so far are kept.');
-        if (!stopping && run.idx + 1 < run.chunks.length) {
+        if (st.status === 'FAILED') err('run-err', (amazonPhase ? 'The Amazon lookup' : 'Batch ' + (run.idx + 1)) + ' stopped with an error on Apify. Its results so far are kept.');
+        if (!amazonPhase && !stopping && run.idx + 1 < run.chunks.length) {
           run.idx++; store.set(K.run, run);
           await startChunk(run);
+          pollTimer = setTimeout(poll, 4000);
+          return;
+        }
+        if (!amazonPhase && !stopping && run.settings.amazon && await startAmazon(run)) {
           pollTimer = setTimeout(poll, 4000);
           return;
         }
@@ -185,14 +222,14 @@
     stopping = true;
     $('run-stop').disabled = true;
     $('r-msg').textContent = 'Stopping. Collecting what has come in so far…';
-    const cur = run.runs[run.idx];
+    const cur = run.phase === 'amazon' ? run.amazon : run.runs[run.idx];
     try { if (cur) await api('abort', { body: { runId: cur.runId } }); } catch { /* it may have finished already */ }
     run.chunks = run.chunks.slice(0, run.idx + 1); store.set(K.run, run);
     poll();
   });
   $('run-cancel').addEventListener('click', async () => {
     const run = store.get(K.run, null);
-    const cur = run && run.runs[run.idx];
+    const cur = run && (run.phase === 'amazon' ? run.amazon : run.runs[run.idx]);
     try { if (cur) await api('abort', { body: { runId: cur.runId } }); } catch { /* ignore */ }
     clearTimeout(pollTimer);
     store.del(K.run);
@@ -202,17 +239,10 @@
   async function finishRun(run) {
     $('r-status').textContent = 'Matching comps';
     $('r-msg').textContent = 'Downloading results and matching them to your listings…';
-    const rows = [];
-    for (const r of run.runs) {
-      if (!r) continue;
-      for (let offset = 0; ; offset += 2000) {
-        const page = await api('items', { params: { datasetId: r.datasetId, offset, limit: 2000 } });
-        rows.push(...page.items);
-        if (page.items.length < 2000) break;
-      }
-    }
-    const data = STG.buildReview(run.listings, rows, run.settings.seller);
-    const review = { data, meta: { filename: run.filename, pulledAt: new Date().toISOString(), count: data.length, rows: rows.length, mode: run.settings.mode } };
+    const rows = await ebayRows(run);
+    const amazonRows = run.amazon ? await fetchRows(run.amazon.datasetId, 'amazon') : (run.settings.amazon ? [] : null);
+    const data = STG.buildReview(run.listings, rows, run.settings.seller, {}, amazonRows);
+    const review = { data, meta: { filename: run.filename, pulledAt: new Date().toISOString(), count: data.length, rows: rows.length, mode: run.settings.mode, amazon: !!run.amazon } };
     if (!store.set(K.review, review)) {
       err('run-err', 'The results are too large for this browser to keep. They are shown now but will be gone if you close the page.');
     }
@@ -232,23 +262,24 @@
     review = review || store.get(K.review, null);
     if (!review) { goHome(); return; }
     DATA = review.data; META = review.meta;
+    DATA.forEach((d) => { if (!d.sug) d.sug = STG.suggest(d); });
     byId = new Map(DATA.map((d) => [d.id, d]));
     approvals = store.get(K.approvals, {}) || {};
     open.clear();
-    $('rv-sub').textContent = 'From ' + META.filename + ', comps pulled ' + fmtDate(META.pulledAt) + '. Each listing is compared with eBay sales of the exact model in the last 90 days. The new price starts at the median sold price; change it if you like, tick the ones to update, then download the upload file.';
+    $('rv-sub').textContent = 'From ' + META.filename + ', comps pulled ' + fmtDate(META.pulledAt) + '. Each listing is compared with eBay sales of the exact model in the last 90 days. The new price starts at the suggested price (see how it is worked out at the bottom); change it if you like, tick the ones to update, then download the upload file.';
     render();
     show('review');
   }
   $('rv-new').addEventListener('click', goHome);
 
   const saveApprovals = () => { if (!store.set(K.approvals, approvals)) setStatus('Could not save ticks in this browser.'); };
-  const suggested = (d) => (d.med != null ? d.med : null);
+  const suggested = (d) => (d.sug && d.sug.price != null ? d.sug.price : null);
   function newPrice(d) {
     const a = approvals[d.id];
     if (a && typeof a.price === 'number') return a.price;
     return suggested(d) != null ? suggested(d) : d.price;
   }
-  const gap = (d) => (d.med ? d.price / d.med - 1 : null);
+  const gap = (d) => (suggested(d) ? d.price / suggested(d) - 1 : null);
   const isOk = (d) => !!(approvals[d.id] && approvals[d.id].ok);
   function bucket(d) {
     const g = gap(d);
@@ -269,32 +300,45 @@
     if (!isFinite(ch) || Math.abs(ch) < 0.005) return '<span class="pill flat">no change</span>';
     return '<span class="pill ' + (ch < 0 ? 'cut' : 'raise') + '">' + pct(ch) + '</span>';
   }
+  const RULE_LABEL = { sold: 'from sales', undercut: '2% under new active', active: 'under active', amazon: 'Amazon −10%', retail: 'retail −25%', none: 'no data' };
+  function rulePill(d) {
+    const r = d.sug ? d.sug.rule : 'none';
+    return '<span class="pill ' + (r === 'sold' ? 'flat' : 'warn') + '" title="' + esc(d.sug ? d.sug.why : '') + '">' + RULE_LABEL[r] + '</span>';
+  }
   const soldUrl = (d) => 'https://www.ebay.com/sch/i.html?_nkw=' + encodeURIComponent(d.query) + '&LH_Sold=1&LH_Complete=1&_ipg=120';
 
   function rowHtml(d) {
     const g = gap(d);
-    const gp = g == null ? '' : '<span class="pill ' + (g > 0.15 ? 'cut' : g < -0.15 ? 'raise' : 'flat') + '">' + pct(g) + ' vs median</span>';
+    const gp = g == null ? '' : '<span class="pill ' + (g > 0.15 ? 'cut' : g < -0.15 ? 'raise' : 'flat') + '">' + pct(g) + ' vs suggested</span>';
     const np = newPrice(d);
     let h = '<div class="row' + (isOk(d) ? ' on' : '') + '" role="listitem" data-id="' + esc(d.id) + '">';
     h += '<input type="checkbox" id="ok-' + esc(d.id) + '" aria-label="Update this listing"' + (isOk(d) ? ' checked' : '') + '>';
     h += '<div class="t"><a href="' + esc(soldUrl(d)) + '" target="_blank" rel="noopener">' + esc(d.title) + '</a>';
     h += '<div class="meta"><span>' + esc(d.model || 'no model #') + '</span>' + (d.sku ? '<span>SKU ' + esc(d.sku) + '</span>' : '') + '<span>Qty ' + d.qty + '</span>';
     h += '<span class="mob num">Yours ' + money(d.price) + '</span>';
-    h += (d.n || d.an) ? '<button type="button" data-act="comps">' + (open.has(d.id) ? 'Hide comps' : 'Show comps') + '</button>' : '';
+    h += (d.n || d.an || d.amz) ? '<button type="button" data-act="comps">' + (open.has(d.id) ? 'Hide comps' : 'Show comps') + '</button>' : '';
     h += '</div></div>';
     h += '<div class="cell yours"><span class="num">' + money(d.price) + '</span>' + gp + '</div>';
     h += '<div class="cell sold"><span class="num">' + money(d.med) + '</span><span class="s">' + confidence(d) + (d.n ? ' ' + money(d.lo) + '–' + money(d.hi) : '') + '</span><span class="mob">' + gp + '</span></div>';
     h += '<div class="cell active"><span class="num">' + money(d.alo) + '</span><span class="s">' + (d.an ? d.an + ' listed' : '') + '</span></div>';
-    h += '<div class="newp"><label>$<input type="number" step="0.01" min="0.99" inputmode="decimal" id="np-' + esc(d.id) + '" value="' + np.toFixed(2) + '" aria-label="New price"></label>' + changePill(d) + '</div>';
+    h += '<div class="newp"><label>$<input type="number" step="0.01" min="0.99" inputmode="decimal" id="np-' + esc(d.id) + '" value="' + np.toFixed(2) + '" aria-label="New price"></label>' + changePill(d) + rulePill(d) + '</div>';
     if (open.has(d.id)) h += compsHtml(d);
     return h + '</div>';
   }
   function compsHtml(d) {
+    const ship = (c) => (c.s ? ' <span class="note">($' + Number(c.p).toFixed(2) + ' + $' + Number(c.s).toFixed(2) + ' ship)</span>' : '');
+    const total = (c) => money(c.tot != null ? c.tot : c.p);
     let h = '<div class="comps">';
-    h += '<div><h4>Sold, last 90 days</h4>' + (d.sold.length ? '<table>' + d.sold.map((c) =>
-      '<tr><td class="d">' + esc(c.d || '') + '</td><td><a href="https://www.ebay.com/itm/' + esc(c.id) + '" target="_blank" rel="noopener">' + esc(c.t) + '</a> <span class="note">' + esc(c.c) + (c.bo ? ' · best offer' : '') + '</span></td><td class="p">' + money(c.p) + '</td></tr>').join('') + '</table>' : '<p class="note">None found.</p>') + '</div>';
-    h += '<div><h4>Active now, lowest first</h4>' + (d.active.length ? '<table>' + d.active.map((c) =>
-      '<tr><td><a href="https://www.ebay.com/itm/' + esc(c.id) + '" target="_blank" rel="noopener">' + esc(c.t) + '</a> <span class="note">' + esc(c.c) + '</span></td><td class="p">' + money(c.p) + '</td></tr>').join('') + '</table>' : '<p class="note">' + (META.mode === 'sold' ? 'Not pulled (sold-only run).' : 'None found.') + '</p>') + '</div>';
+    h += '<p class="why">' + esc(d.sug ? d.sug.why : '') + (d.sug && d.sug.price != null ? ': <strong>' + money(d.sug.price) + '</strong>' : '') + '.' +
+      (d.dropped && (d.dropped.outliers || d.dropped.lowFeedback) ? ' Left out: ' + [d.dropped.outliers ? d.dropped.outliers + ' more than 20% from the median' : '', d.dropped.lowFeedback ? d.dropped.lowFeedback + ' from sellers under 98% feedback' : ''].filter(Boolean).join(', ') + '.' : '') + '</p>';
+    h += '<div><h4>Sold, last 90 days (price + shipping paid)</h4>' + (d.sold.length ? '<table>' + d.sold.map((c) =>
+      '<tr><td class="d">' + esc(c.d || '') + (c.recent ? ' <span class="pill raise">30d</span>' : '') + '</td><td><a href="https://www.ebay.com/itm/' + esc(c.id) + '" target="_blank" rel="noopener">' + esc(c.t) + '</a> <span class="note">' + esc(c.c) + (c.bo ? ' · best offer' : '') + '</span>' + ship(c) + '</td><td class="p">' + total(c) + '</td></tr>').join('') + '</table>' : '<p class="note">None found.</p>') + '</div>';
+    h += '<div><h4>Active now, lowest first (sellers 98%+)</h4>' + (d.active.length ? '<table>' + d.active.map((c) =>
+      '<tr><td><a href="https://www.ebay.com/itm/' + esc(c.id) + '" target="_blank" rel="noopener">' + esc(c.t) + '</a> <span class="note">' + esc(c.c) + '</span>' + ship(c) + '</td><td class="p">' + total(c) + '</td></tr>').join('') + '</table>' : '<p class="note">' + (META.mode === 'sold' ? 'Not pulled (sold-only run).' : 'None found.') + '</p>') + '</div>';
+    if (d.amz) {
+      h += '<div><h4>Amazon</h4><table><tr><td>' + (d.amz.asin ? '<a href="https://www.amazon.com/dp/' + esc(d.amz.asin) + '" target="_blank" rel="noopener">' + esc(d.amz.title || 'Amazon listing') + '</a>' : esc(d.amz.title || '')) +
+        (d.amz.list ? ' <span class="note">list price ' + money(d.amz.list) + '</span>' : '') + '</td><td class="p">' + (d.amz.price ? money(d.amz.price) : 'not for sale') + '</td></tr></table></div>';
+    }
     return h + '</div>';
   }
 
@@ -303,7 +347,7 @@
     if (term) { const t = term.toLowerCase(); v = v.filter((d) => (d.title + ' ' + d.model + ' ' + d.sku).toLowerCase().includes(t)); }
     const key = {
       gap: (d) => -Math.abs(gap(d) == null ? -1e9 : gap(d)),
-      value: (d) => -Math.abs((d.med != null ? d.price - d.med : 0) * d.qty),
+      value: (d) => -Math.abs((suggested(d) != null ? d.price - suggested(d) : 0) * d.qty),
       price: (d) => -d.price, sales: (d) => -d.n,
     }[sort];
     if (sort === 'title') v.sort((a, b) => a.title.localeCompare(b.title));
